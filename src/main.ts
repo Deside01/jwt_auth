@@ -1,48 +1,22 @@
-import express, {
-  NextFunction,
-  Request,
-  RequestHandler,
-  Response,
-} from "express";
+import express, { Response } from "express";
 import dotenv from "dotenv";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
-
+import validateAccessToken from "./middlewares/validateAccessToken";
+import IRequestUser from "./interfaces/IRequestUser";
 dotenv.config();
 
 const app = express();
 const ACCESS_KEY = process.env.ACCESS_KEY || "secret";
+const REFRESH_KEY = process.env.ACCESS_KEY || "secret_ref";
+
 app.use(express.json());
 
 const users: any[] = [];
+let refTokens: any[] = [];
 
-interface RequestUser extends Request {
-  user?: any;
-}
-
-const validateAccessToken: RequestHandler = (
-  req: RequestUser,
-  res: Response,
-  next: NextFunction
-): void => {
-  const header = req.headers.authorization;
-  const accessToken = header && header.split(" ")[1];
-
-  if (!accessToken) {
-    res.sendStatus(204);
-    return;
-  }
-
-  jwt.verify(accessToken, ACCESS_KEY, (err: any, user: any) => {
-    if (err) {
-      res.sendStatus(403);
-      return;
-    }
-
-    req.user = user;
-
-    next();
-  });
+const generateAccessToken = (payload: object, expiresIn: any = "30s") => {
+  return jwt.sign(payload, ACCESS_KEY, { expiresIn });
 };
 
 app.post("/reg", async (req, res): Promise<any> => {
@@ -69,17 +43,49 @@ app.post("/login", async (req, res): Promise<any> => {
 
   if (!checkPassword) return res.sendStatus(403);
 
-  const token = jwt.sign({ username }, ACCESS_KEY, { expiresIn: "30s" });
+  const accessToken = generateAccessToken({ username });
+  const refreshToken = jwt.sign({ username }, REFRESH_KEY, {
+    expiresIn: "120s",
+  });
 
-  return res.send(token);
+  refTokens.push(refreshToken);
+
+  return res.send({ accessToken, refreshToken });
 });
 
 app.get(
   "/profile",
   validateAccessToken,
-  (req: RequestUser, res: Response): void => {
+  (req: IRequestUser, res: Response): void => {
     res.send("gg");
   }
 );
+
+app.delete("/logout", (req, res): any => {
+  const currentToken = req.body.token;
+  if (!currentToken) return res.sendStatus(401);
+
+  refTokens = refTokens.filter((token) => token !== currentToken);
+  return res.sendStatus(204);
+});
+
+app.get("/token", (req, res) => {
+  res.send(refTokens);
+});
+
+app.post("/token", (req, res): any => {
+  const token = req.body.token;
+  if (!token) return res.sendStatus(401);
+
+  if (!refTokens.includes(token)) return res.sendStatus(401);
+
+  jwt.verify(token, REFRESH_KEY, (err: any, payload: any) => {
+    if (err) return res.sendStatus(403);
+
+    const newAccessToken = generateAccessToken({ username: payload.username });
+
+    return res.send(newAccessToken);
+  });
+});
 
 app.listen(process.env.PORT, () => console.log("WORK"));
